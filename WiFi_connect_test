@@ -1,0 +1,288 @@
+#include <StateMachine.h>
+
+StateMachine esp8266machine = StateMachine();
+State* S0  = esp8266machine.addState(&esp8266StatusNew); 
+State* S1  = esp8266machine.addState(&esp8266StatusResetDone);
+State* S2  = esp8266machine.addState(&esp8266StatusNoResponse);
+State* S3  = esp8266machine.addState(&esp8266StatusBadResponse);
+State* S4  = esp8266machine.addState(&esp8266StatusReceiveModeSet);
+State* S5  = esp8266machine.addState(&esp8266StatusNoWifi);
+State* S6  = esp8266machine.addState(&esp8266StatusConnectedToWifi);
+State* S7  = esp8266machine.addState(&esp8266StatusNoHost);
+State* S8  = esp8266machine.addState(&esp8266StatusConnectedToHost);
+State* S9  = esp8266machine.addState(&esp8266StatusSendReady);
+State* S10 = esp8266machine.addState(&esp8266StatusFirstMsgSent);
+State* S11 = esp8266machine.addState(&esp8266StatusFirstResponseReceived);
+
+
+int esp8266RetryNewDelay = 5000;
+int esp8266RetryDelay = 5000;
+String response_length;
+
+String serial_response; // Stores serial response from devices eg GSM
+char serial_incoming_char=0;
+unsigned long  esp8266_status_millis = 0;
+
+void setup() {
+
+  Serial.begin(9600);
+  Serial.println("Starting");
+  Serial3.begin(115200);
+  Serial3.setTimeout(1000);
+
+  S0->addTransition(&transitionResetOK,S1);
+  S0->addTransition(&transitionBadResponse,S3);
+  S0->addTransition(&transitionNoResponse,S2);
+  S2->addTransition(&transitionRetryNew,S0);
+  S3->addTransition(&transitionRetryNew,S0);
+  S1->addTransition(&transitionDelay,S4);
+  S4->addTransition(&transitionConnectedToWifi,S6);
+  S4->addTransition(&transitionNoWifi,S5);
+  S4->addTransition(&transitionBadResponse,S3);
+  S5->addTransition(&transitionRetry,S4);
+  S6->addTransition(&transitionConnectedToHost,S8);
+  S6->addTransition(&transitionNoHost,S7);
+  S6->addTransition(&transitionBadResponse,S3);
+  S7->addTransition(&transitionRetry,S6);
+  S8->addTransition(&transitionDelay,S9);
+  S9->addTransition(&transitionSendOK,S10);
+  S9->addTransition(&transitionBadResponse,S3);
+  S10->addTransition(&transitionBadResponse,S3);
+  S10->addTransition(&transitionFirstResponseReceived,S11);
+  
+}
+
+void loop() {
+
+
+  // Stream serial from ESP8266
+  while(Serial3.available())
+  {
+    serial_incoming_char=Serial3.read();
+    /*
+    if (serial_incoming_char == '\r') {Serial.print("(\\r)");}
+    else if (serial_incoming_char == '\n') {Serial.print("(\\n)");}
+    else {Serial.print("["+String(serial_incoming_char)+"]");}
+    */
+    serial_response = serial_response + String(serial_incoming_char);
+  }
+
+  esp8266machine.run();
+
+}
+
+void esp8266StatusEntry() {
+  esp8266_status_millis = millis();
+  serial_response = "";
+  }
+
+// --- --- --- esp8266 State Machine States --- --- --- //
+
+void esp8266StatusNoResponse() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is NoResponse");
+    esp8266StatusEntry();
+  }
+}
+
+void esp8266StatusBadResponse() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is BadResponse");
+    Serial.println("Response:");
+    Serial.println(serial_response);
+    esp8266StatusEntry();
+  }
+}
+
+void esp8266StatusNew(){
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is New");
+    esp8266StatusEntry();
+    Serial3.print("AT+RST\r\n");
+  }
+}
+
+void esp8266StatusResetDone(){
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is ResetDone");
+    esp8266StatusEntry();
+    Serial3.print("AT+CIPRECVMODE=1\r\n");
+  }
+}
+
+void esp8266StatusReceiveModeSet(){
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is ReceiveModeSet");
+    esp8266StatusEntry();
+    Serial3.print("AT+CIPSTATUS\r\n");
+  }
+}
+
+void esp8266StatusNoWifi(){
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is NoWifi");
+    esp8266StatusEntry();
+    //Serial3.print("AT+CIPRECVMODE=1\r\n");
+  }
+}
+
+void esp8266StatusConnectedToWifi(){
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is ConnectedToWifi");
+    esp8266StatusEntry();
+    Serial3.print("AT+CIPSTART=\"SSL\",\"ic7co5dblh.execute-api.us-east-1.amazonaws.com\",443\r\n");
+  }
+}
+
+void esp8266StatusNoHost() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is NoHost");
+    esp8266StatusEntry();
+  }
+}
+
+void esp8266StatusConnectedToHost() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is ConnectedToHost");
+    esp8266StatusEntry();
+    Serial3.print("AT+CIPSEND=172\r\n");
+  }
+}
+
+void esp8266StatusSendReady() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is SendReady");
+    esp8266StatusEntry();
+    Serial3.println("POST /p/tomcat HTTP/1.1");
+    Serial3.println("Host: ic7co5dblh.execute-api.us-east-1.amazonaws.com");
+    Serial3.println("Content-Type: application/json");
+    Serial3.println("Content-Length: 39");
+    Serial3.println("");
+    Serial3.println("{\"message\": \"ESP8266: Initialising.\"}");
+  }
+}
+
+void esp8266StatusFirstMsgSent() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is FirstMsgSent");
+    esp8266StatusEntry();
+    response_length = midString(serial_response,",","\r");
+    Serial3.println("AT+CIPRECVDATA="+response_length);
+  }
+}
+
+void esp8266StatusFirstResponseReceived() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is FirstResponseReceived");
+    Serial.println(serial_response);
+    esp8266StatusEntry();
+    //Serial3.println("AT+CIPRECVDATA="+response_length);
+  }
+}
+
+void esp8266StatusReady() {
+  if(esp8266machine.executeOnce){
+    Serial.println("ESP8266: Status is Ready");
+    esp8266StatusEntry();
+    esp8266RetryNewDelay = 5000;
+  }
+}
+
+bool transitionRetryNew(){
+  if ((millis() - esp8266_status_millis) > esp8266RetryNewDelay) {
+    if(esp8266RetryNewDelay < 900000) {esp8266RetryNewDelay = esp8266RetryNewDelay * 2;} // Double the retry period
+    return true;
+    }
+  return false;
+}
+
+bool transitionNoResponse(){
+  if (((millis() - esp8266_status_millis) > 2000) && (serial_response.length() == 0)) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionBadResponse(){
+  // Actually this will also capture No Response as well. So can be used without the NoResponse transition.
+  if (((millis() - esp8266_status_millis) > 25000)) {
+    return true;
+    }
+  return false;
+}
+
+bool transitionResetOK(){
+  if (serial_response.indexOf("AT+RST\r\n\r\nOK") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionDelay(){
+  if ((millis() - esp8266_status_millis) > 1000) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionNoWifi () {
+  if (serial_response.indexOf("STATUS:") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionConnectedToWifi () {
+  if (serial_response.indexOf("STATUS:2") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionRetry(){
+  if ((millis() - esp8266_status_millis) > esp8266RetryNewDelay) {
+    if(esp8266RetryDelay < 900000) {esp8266RetryDelay = esp8266RetryDelay * 2;} // Double the retry period
+    return true;
+    }
+  return false;
+}
+
+bool transitionConnectedToHost () {
+  if (serial_response.indexOf("CONNECT\r\n\r\nOK\r\n") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionNoHost () {
+  if (serial_response.indexOf("connect fail\r\n") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionSendOK () {
+  if (serial_response.indexOf("SEND OK") != -1 && serial_response.indexOf("+IPD,") != -1) {
+    return true;
+  }
+  return false;
+}
+
+bool transitionFirstResponseReceived () {
+  if (serial_response.indexOf("HTTP/1.1 200 OK") != -1) {
+    return true;
+  }
+  return false;
+}
+
+// --- --- --- esp8266 State Machine States End --- --- --- //
+
+
+String midString(String str, String start, String finish){
+  int locStart = str.indexOf(start);
+  if (locStart==-1) return "";
+  locStart += start.length();
+  int locFinish = str.indexOf(finish, locStart);
+  if (locFinish==-1) return "";
+  return str.substring(locStart, locFinish);
+}
